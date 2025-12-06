@@ -1,0 +1,26 @@
+---
+description: Project-wide conventions for agent_gym
+globs: ["**/*"]
+---
+
+# Project Rules
+
+## Architecture
+- Main API: `create_environment()` returns 3 callables
+- All LLM calls use Gemini via `google-generativeai`
+- Traces normalized to `TraceSchema` before use
+
+## File Organization
+- `src/` - Core library code
+- `examples/` - Runnable demos with sample data
+- `data/` - User trace data (gitignored except .gitkeep)
+- `docs/` - Technical documentation
+
+## Dependencies
+- Keep minimal (hackathon constraint)
+- No ML frameworks (just numpy)
+- Gemini SDK for all LLM needs
+
+## Testing
+- Run examples as smoke tests: `python examples/customer_service.py`
+- Check imports work: `python -c "from src import create_environment"`

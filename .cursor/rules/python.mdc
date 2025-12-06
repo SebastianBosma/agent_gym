@@ -1,0 +1,29 @@
+---
+description: Python code conventions for agent_gym
+globs: ["**/*.py"]
+---
+
+# Python Rules
+
+## Style
+- Type hints on all public functions
+- Docstrings: Google style, keep concise
+- Max line length: 100 chars
+- Use `Optional[X]` not `X | None` for 3.9 compat
+
+## Imports
+```python
+# stdlib
+# third-party
+# local (relative)
+```
+
+## Error Handling
+- Raise `ValueError` for bad inputs
+- Let Gemini API errors propagate (caller handles)
+- Log with `rich.console` for demos only
+
+## Patterns
+- Factory functions over classes when stateless
+- Pydantic for all data validation
+- Lazy-load expensive resources (Gemini models)

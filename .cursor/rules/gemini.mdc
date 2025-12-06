@@ -1,0 +1,42 @@
+---
+description: Gemini API usage patterns
+globs: ["**/agent.py", "**/mocker.py", "**/reward.py"]
+---
+
+# Gemini Rules
+
+## Setup
+```python
+import google.generativeai as genai
+# API key via GOOGLE_API_KEY env var (auto-detected)
+```
+
+## Models
+- `gemini-pro` - Text generation (agent, mocker fallback)
+- `models/embedding-001` - Embeddings (reward similarity)
+
+## Patterns
+```python
+# Lazy-load models
+@property
+def model(self):
+    if self._model is None:
+        self._model = genai.GenerativeModel('gemini-pro')
+    return self._model
+
+# Chat with history
+chat = self.model.start_chat(history=messages)
+response = chat.send_message(user_message)
+
+# Embeddings
+result = genai.embed_content(
+    model="models/embedding-001",
+    content=[text1, text2],
+    task_type="semantic_similarity"
+)
+```
+
+## Error Handling
+- Wrap API calls in try/except
+- Provide fallback for offline/quota issues
+- Don't retry automatically (let caller decide)
