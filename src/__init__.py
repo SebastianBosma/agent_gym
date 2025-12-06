@@ -7,7 +7,12 @@ Main API:
     query_agent, tool_mocker, reward_fn = create_environment(traces)
 """
 
+from pathlib import Path
+from dotenv import load_dotenv
 from typing import List, Dict, Any, Tuple, Callable
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from .trace_parser import parse_traces
 from .agent import QueryAgent

@@ -66,8 +66,9 @@ pip install -r requirements.txt
 # Install dependencies (if not already done in setup)
 pip install -r requirements.txt
 
-# Set your Gemini API key
-export GOOGLE_API_KEY="your-api-key-here"
+# Copy .env.example and add your Gemini API key
+cp .env.example .env
+# Edit .env and set GOOGLE_API_KEY=your-actual-key
 
 # Run the demo
 python examples/customer_service.py
@@ -143,6 +144,7 @@ agent_gym/
 - `pydantic` - Data validation and schemas
 - `numpy` - Numerical utilities
 - `rich` - Pretty console output
+- `python-dotenv` - Environment variable management
 
 ## License
 
