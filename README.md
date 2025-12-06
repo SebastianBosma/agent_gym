@@ -45,10 +45,25 @@ Use the RL environment to train a smaller, domain-specific model:
 - **Reward Model**: `reward_fn` scores completions for RLHF
 - **Distillation**: Transfer capabilities from large LM to small, deployable model
 
+## Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/your-org/agent_gym.git
+cd agent_gym
+
+# Create and activate a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Install dependencies (if not already done in setup)
 pip install -r requirements.txt
 
 # Set your Gemini API key
