@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 import statistics
 from pathlib import Path
+
+# Add parent directory to path for imports when run as script
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from sgd_grpo_demo.gemini_judge import GeminiJudge, RewardCache
+from gemini_judge import GeminiJudge, RewardCache
 
 
 def generate_one(model, tokenizer, prompt: str, max_new_tokens: int = 128) -> str:

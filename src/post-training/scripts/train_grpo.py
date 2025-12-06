@@ -3,18 +3,30 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
+
+# Add parent directory to path for imports when run as script
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import logging
+
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from trl import GRPOConfig, GRPOTrainer
 
-from sgd_grpo_demo.gemini_judge import GeminiJudge, RewardCache
-from sgd_grpo_demo.reward_fn import make_gemini_reward_func
+from gemini_judge import GeminiJudge, RewardCache
+from reward_fn import make_gemini_reward_func
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,23 +79,34 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
     # --------- sanity checks & paths ----------
     if not os.getenv("GEMINI_API_KEY"):
         raise RuntimeError("Missing GEMINI_API_KEY env var. Put it in .env and export it.")
+
+    # Handle HuggingFace token (support both naming conventions)
+    hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+    if hf_token and not os.getenv("HF_TOKEN"):
+        os.environ["HF_TOKEN"] = hf_token
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = args.output_dir or f"runs/grpo_{ts}"
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     reward_cache_path = str(Path(output_dir) / "rewards.cache.sqlite")
 
-    print(f"[info] Output dir: {output_dir}")
-    print(f"[info] Using Gemini judge model: {args.gemini_model}")
-    print(f"[info] Reward cache: {reward_cache_path}")
+    logger.info(f"Output dir: {output_dir}")
+    logger.info(f"Using Gemini judge model: {args.gemini_model}")
+    logger.info(f"Reward cache: {reward_cache_path}")
 
     # --------- load dataset ----------
     # Expects JSONL with: prompt, ground_truth, optional rubric
     ds = load_dataset("json", data_files={"train": args.train_jsonl}, split="train")
-    print(f"[info] Loaded {len(ds)} training examples from {args.train_jsonl}")
+    logger.info(f"Loaded {len(ds)} training examples from {args.train_jsonl}")
 
     required_cols = {"prompt", "ground_truth"}
     missing = required_cols - set(ds.column_names)
@@ -91,11 +114,11 @@ def main() -> None:
         raise RuntimeError(f"train_jsonl missing required columns: {sorted(missing)}")
 
     if "rubric" not in ds.column_names:
-        print("[warn] No 'rubric' column; reward will use a generic rubric.")
+        logger.warning("No 'rubric' column; reward will use a generic rubric.")
 
     # --------- tokenizer & model ----------
-    print(f"[info] Loading base model: {args.model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+    logger.info(f"Loading base model: {args.model_name}")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True, token=hf_token)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -112,6 +135,7 @@ def main() -> None:
         args.model_name,
         torch_dtype=torch_dtype,
         device_map=device_map,
+        token=hf_token,
     )
 
     # ensure generation config is sane
@@ -124,7 +148,7 @@ def main() -> None:
     # --------- optional LoRA ----------
     peft_config = None
     if args.use_lora:
-        print("[info] Using LoRA PEFT")
+        logger.info("Using LoRA PEFT")
         peft_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
@@ -157,7 +181,7 @@ def main() -> None:
         max_completion_length=args.max_completion_length,
     )
 
-    print("[info] Starting GRPO training...")
+    logger.info("Starting GRPO training...")
     trainer = GRPOTrainer(
         model=model,
         args=training_args,
@@ -169,13 +193,12 @@ def main() -> None:
 
     trainer.train()
 
-    print("[info] Saving model and tokenizer...")
+    logger.info("Saving model and tokenizer...")
     trainer.save_model(output_dir)
     tokenizer.save_pretrained(output_dir)
 
-    print(f"\n✅ Done. Trained artifacts saved to: {output_dir}")
+    logger.info(f"Done. Trained artifacts saved to: {output_dir}")
 
 
 if __name__ == "__main__":
     main()
-
