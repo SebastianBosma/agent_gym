@@ -1,0 +1,50 @@
+---
+description: DSPy patterns for prompt optimization
+globs: ["**/agent.py", "**/mocker.py"]
+---
+
+# DSPy Rules
+
+## Setup
+```python
+import dspy
+
+# Configure with Gemini
+lm = dspy.Google("models/gemini-1.5-pro-latest")
+dspy.settings.configure(lm=lm)
+```
+
+## Signatures
+Define input/output contracts:
+```python
+class QueryResponse(dspy.Signature):
+    """Generate a customer service response."""
+    user_message: str = dspy.InputField()
+    context: str = dspy.InputField()
+    response: str = dspy.OutputField()
+```
+
+## Modules
+```python
+class QueryAgent(dspy.Module):
+    def __init__(self):
+        self.respond = dspy.ChainOfThought(QueryResponse)
+    
+    def forward(self, user_message, context):
+        return self.respond(user_message=user_message, context=context)
+```
+
+## Optimization
+```python
+from dspy.teleprompt import BootstrapFewShot
+
+# Create optimizer with trace data as examples
+optimizer = BootstrapFewShot(metric=reward_fn)
+optimized_agent = optimizer.compile(agent, trainset=traces)
+```
+
+## Key Patterns
+- Use `dspy.ChainOfThought` for complex reasoning
+- Use `dspy.Predict` for simple generation
+- Signatures define the contract, modules define the flow
+- Compile with traces to optimize few-shot examples

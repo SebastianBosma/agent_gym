@@ -1,32 +1,51 @@
 """
-Query Agent - Gemini-powered agent for customer service interactions.
+Query Agent - DSPy-powered agent for customer service interactions.
 
-This module provides:
-- Gemini-based response generation
-- Context management for conversations
-- Tool calling integration
-- System prompt customization based on traces
+Uses DSPy with Gemini backend for:
+- Optimizable prompt generation
+- Few-shot learning from traces
+- Chain-of-thought reasoning
 """
 
 from typing import List, Dict, Any, Optional, Callable
-import google.generativeai as genai
+import dspy
 
 from ..trace_parser import TraceSchema
 
 
+class CustomerServiceResponse(dspy.Signature):
+    """Generate a helpful customer service response."""
+    
+    user_message: str = dspy.InputField(desc="The customer's message")
+    conversation_history: str = dspy.InputField(desc="Previous messages in the conversation")
+    response: str = dspy.OutputField(desc="Professional, helpful response to the customer")
+
+
+class QueryAgentModule(dspy.Module):
+    """DSPy module for generating customer service responses."""
+    
+    def __init__(self):
+        super().__init__()
+        self.respond = dspy.ChainOfThought(CustomerServiceResponse)
+    
+    def forward(self, user_message: str, conversation_history: str = "") -> str:
+        result = self.respond(
+            user_message=user_message,
+            conversation_history=conversation_history
+        )
+        return result.response
+
+
 class QueryAgent:
     """
-    Gemini-powered agent that responds to customer queries.
+    DSPy-powered agent that responds to customer queries.
     
-    The agent learns from trace data to understand:
-    - Common query patterns
-    - Appropriate response styles
-    - When and how to use tools
+    The agent can be optimized using traces via DSPy's teleprompt optimizers.
     
     Attributes:
-        traces: Training traces for context
-        system_prompt: Generated system prompt based on traces
-        tools: Available tools and their schemas
+        traces: Training traces for context and optimization
+        module: The underlying DSPy module
+        conversation_history: Current conversation state
     """
     
     def __init__(
@@ -35,7 +54,7 @@ class QueryAgent:
         tool_executor: Optional[Callable] = None,
     ):
         """
-        Initialize agent with traces and optional tool executor.
+        Initialize agent with traces.
         
         Args:
             traces: List of TraceSchema objects for learning
@@ -43,49 +62,16 @@ class QueryAgent:
         """
         self.traces = traces
         self.tool_executor = tool_executor
-        self.system_prompt = self._generate_system_prompt()
+        self.module = QueryAgentModule()
         self.conversation_history: List[Dict[str, str]] = []
-        self._model = None
+        self._lm_configured = False
     
-    @property
-    def model(self):
-        """Lazy-load Gemini model."""
-        if self._model is None:
-            self._model = genai.GenerativeModel(
-                'gemini-pro',
-                system_instruction=self.system_prompt,
-            )
-        return self._model
-    
-    def _generate_system_prompt(self) -> str:
-        """
-        Generate a system prompt based on trace patterns.
-        
-        Analyzes traces to extract:
-        - Common greeting patterns
-        - Response style guidelines
-        - Domain-specific knowledge
-        """
-        # Extract example responses from traces
-        examples = []
-        for trace in self.traces[:5]:  # Sample from first 5 traces
-            for msg in trace.messages:
-                if msg.role == "assistant" and len(examples) < 3:
-                    examples.append(msg.content)
-        
-        examples_str = "\n".join(f"- {ex[:100]}..." for ex in examples)
-        
-        return f"""You are a helpful customer service agent. Your role is to assist customers with their inquiries professionally and efficiently.
-
-Based on historical interactions, here are example response styles:
-{examples_str}
-
-Guidelines:
-1. Be polite and professional at all times
-2. Ask clarifying questions when needed
-3. Use available tools to look up information
-4. Provide clear, actionable responses
-5. Acknowledge customer concerns empathetically"""
+    def _ensure_lm_configured(self):
+        """Configure DSPy with Gemini on first use."""
+        if not self._lm_configured:
+            lm = dspy.Google("models/gemini-1.5-pro-latest")
+            dspy.settings.configure(lm=lm)
+            self._lm_configured = True
     
     def query(
         self,
@@ -102,28 +88,32 @@ Guidelines:
         Returns:
             Agent's response string
         """
-        # Build conversation context
-        messages = []
+        self._ensure_lm_configured()
         
-        # Add history from context if available
+        # Build conversation history string
+        history_str = ""
         if context and "history" in context:
-            for msg in context["history"]:
-                role = "user" if msg["role"] == "user" else "model"
-                messages.append({"role": role, "parts": [msg["content"]]})
-        
-        # Add current message
-        messages.append({"role": "user", "parts": [user_message]})
+            history_str = "\n".join(
+                f"{msg['role']}: {msg['content']}"
+                for msg in context["history"][-5:]
+            )
+        elif self.conversation_history:
+            history_str = "\n".join(
+                f"{msg['role']}: {msg['content']}"
+                for msg in self.conversation_history[-5:]
+            )
         
         try:
-            # Start chat with history
-            chat = self.model.start_chat(history=messages[:-1])
-            response = chat.send_message(user_message)
+            response = self.module(
+                user_message=user_message,
+                conversation_history=history_str
+            )
             
             # Store in conversation history
             self.conversation_history.append({"role": "user", "content": user_message})
-            self.conversation_history.append({"role": "assistant", "content": response.text})
+            self.conversation_history.append({"role": "assistant", "content": response})
             
-            return response.text
+            return response
         except Exception as e:
             return f"I apologize, but I'm having trouble processing your request. Error: {str(e)}"
     
@@ -131,16 +121,45 @@ Guidelines:
         """Clear conversation history."""
         self.conversation_history = []
     
-    def set_tool_executor(self, executor: Callable) -> None:
-        """
-        Set the tool executor for handling tool calls.
-        
-        Args:
-            executor: Function that takes (tool_name, tool_args) and returns result
-        """
-        self.tool_executor = executor
+    def get_module(self) -> QueryAgentModule:
+        """Return the DSPy module for optimization."""
+        return self.module
     
-    def get_conversation_history(self) -> List[Dict[str, str]]:
-        """Return current conversation history."""
-        return self.conversation_history.copy()
-
+    def set_module(self, module: QueryAgentModule) -> None:
+        """Set an optimized DSPy module."""
+        self.module = module
+    
+    def get_training_examples(self) -> List[dspy.Example]:
+        """
+        Convert traces to DSPy Examples for optimization.
+        
+        Returns:
+            List of dspy.Example objects
+        """
+        examples = []
+        for trace in self.traces:
+            history = []
+            for msg in trace.messages:
+                if msg.role == "user":
+                    # Create example from user message and next assistant response
+                    next_assistant = self._find_next_assistant_response(trace.messages, msg)
+                    if next_assistant:
+                        examples.append(dspy.Example(
+                            user_message=msg.content,
+                            conversation_history="\n".join(history),
+                            response=next_assistant
+                        ).with_inputs("user_message", "conversation_history"))
+                
+                history.append(f"{msg.role}: {msg.content}")
+        
+        return examples
+    
+    def _find_next_assistant_response(self, messages, user_msg) -> Optional[str]:
+        """Find the assistant response following a user message."""
+        found_user = False
+        for msg in messages:
+            if msg == user_msg:
+                found_user = True
+            elif found_user and msg.role == "assistant":
+                return msg.content
+        return None

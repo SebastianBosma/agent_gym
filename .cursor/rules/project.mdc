@@ -7,7 +7,8 @@ globs: ["**/*"]
 
 ## Architecture
 - Main API: `create_environment()` returns 3 callables
-- All LLM calls use Gemini via `google-generativeai`
+- LLM calls use DSPy with Gemini backend
+- DSPy modules for query_agent and tool_mocker (optimizable)
 - Traces normalized to `TraceSchema` before use
 
 ## File Organization

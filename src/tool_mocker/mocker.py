@@ -1,30 +1,50 @@
 """
 Tool Mocker - Return realistic tool responses based on trace data.
 
-This module:
-- Extracts tool call patterns from traces
-- Builds a lookup table of tool_name + args -> response
-- Handles fuzzy matching for similar but not identical calls
-- Can generate synthetic responses for unseen tool calls using Gemini
+Uses DSPy for generating synthetic responses when no exact match exists.
 """
 
 from typing import List, Dict, Any, Optional
-import google.generativeai as genai
+import json
+import dspy
 
 from ..trace_parser import TraceSchema
+
+
+class ToolResponseSignature(dspy.Signature):
+    """Generate a realistic tool response."""
+    
+    tool_name: str = dspy.InputField(desc="Name of the tool being called")
+    tool_args: str = dspy.InputField(desc="JSON string of tool arguments")
+    examples: str = dspy.InputField(desc="Example responses from similar tool calls")
+    response: str = dspy.OutputField(desc="JSON response from the tool")
+
+
+class ToolResponseModule(dspy.Module):
+    """DSPy module for generating tool responses."""
+    
+    def __init__(self):
+        super().__init__()
+        self.generate = dspy.Predict(ToolResponseSignature)
+    
+    def forward(self, tool_name: str, tool_args: str, examples: str = "") -> str:
+        result = self.generate(
+            tool_name=tool_name,
+            tool_args=tool_args,
+            examples=examples
+        )
+        return result.response
 
 
 class ToolMocker:
     """
     Mock tool responses based on patterns learned from traces.
     
-    The mocker builds an index of tool calls seen in traces and returns
-    appropriate responses. For novel tool calls, it can use Gemini to
-    generate plausible responses.
+    Uses exact matching first, then DSPy for generation.
     
     Attributes:
-        tool_index: Mapping of (tool_name, args_hash) -> response
-        traces: Original traces for context
+        tool_index: Mapping of tool_name -> list of (args, response) pairs
+        module: DSPy module for generating novel responses
     """
     
     def __init__(self, traces: List[TraceSchema]):
@@ -36,7 +56,16 @@ class ToolMocker:
         """
         self.traces = traces
         self.tool_index: Dict[str, List[Dict[str, Any]]] = {}
+        self.module = ToolResponseModule()
+        self._lm_configured = False
         self._build_index()
+    
+    def _ensure_lm_configured(self):
+        """Configure DSPy with Gemini on first use."""
+        if not self._lm_configured:
+            lm = dspy.Google("models/gemini-1.5-pro-latest")
+            dspy.settings.configure(lm=lm)
+            self._lm_configured = True
     
     def _build_index(self) -> None:
         """Extract all tool calls and responses from traces."""
@@ -88,12 +117,12 @@ class ToolMocker:
             if self.tool_index[tool_name]:
                 return self.tool_index[tool_name][0]["response"]
         
-        # Generate synthetic response using Gemini
+        # Generate synthetic response using DSPy
         return self._generate_response(tool_name, tool_args)
     
     def _generate_response(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Generate a synthetic tool response using Gemini.
+        Generate a synthetic tool response using DSPy.
         
         Args:
             tool_name: Name of the tool
@@ -102,31 +131,54 @@ class ToolMocker:
         Returns:
             Generated tool response
         """
+        self._ensure_lm_configured()
+        
         # Get examples from similar tools for context
         examples = []
         if tool_name in self.tool_index:
             examples = self.tool_index[tool_name][:3]
         
-        prompt = f"""You are simulating a tool response for a customer service system.
-
-Tool name: {tool_name}
-Tool arguments: {tool_args}
-
-Examples of this tool's responses:
-{examples if examples else "No examples available"}
-
-Generate a realistic JSON response for this tool call. Return only valid JSON."""
-
+        examples_str = json.dumps(examples, indent=2) if examples else "No examples available"
+        
         try:
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(prompt)
-            import json
-            return json.loads(response.text)
-        except Exception:
+            response_str = self.module(
+                tool_name=tool_name,
+                tool_args=json.dumps(tool_args),
+                examples=examples_str
+            )
+            return json.loads(response_str)
+        except (json.JSONDecodeError, Exception):
             # Fallback response
             return {"status": "success", "data": None}
     
     def get_available_tools(self) -> List[str]:
         """Return list of tool names seen in traces."""
         return list(self.tool_index.keys())
-
+    
+    def get_module(self) -> ToolResponseModule:
+        """Return the DSPy module for optimization."""
+        return self.module
+    
+    def set_module(self, module: ToolResponseModule) -> None:
+        """Set an optimized DSPy module."""
+        self.module = module
+    
+    def get_training_examples(self) -> List[dspy.Example]:
+        """
+        Convert tool index to DSPy Examples for optimization.
+        
+        Returns:
+            List of dspy.Example objects
+        """
+        examples = []
+        for tool_name, entries in self.tool_index.items():
+            for entry in entries:
+                if entry["response"] is not None:
+                    examples.append(dspy.Example(
+                        tool_name=tool_name,
+                        tool_args=json.dumps(entry["args"]),
+                        examples="",
+                        response=json.dumps(entry["response"])
+                    ).with_inputs("tool_name", "tool_args", "examples"))
+        
+        return examples

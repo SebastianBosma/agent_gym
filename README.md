@@ -10,6 +10,41 @@ Agent Gym takes historical conversation logs (e.g., customer service transcripts
 - Use tools appropriately based on context
 - Optimize for customer satisfaction and task completion
 
+## User Journey
+
+```
+1. COLLECT        2. CONVERT         3. CREATE ENVIRONMENT        4. DEPLOY
+   Raw Logs  ───▶  JSON Traces  ───▶  (parse + optimize)    ───▶  Agent
+   (CSV, DB)       (normalized)       query_agent                  (production)
+                                      tool_mocker
+                                      reward_fn
+```
+
+| Step | What You Do | Output |
+|------|-------------|--------|
+| 1. Collect | Export customer service logs | Raw data files |
+| 2. Convert | Normalize to trace schema | `data/processed/*.json` |
+| 3. Create | `create_environment(traces)` | Optimized query_agent, tool_mocker, reward_fn |
+| 4. Deploy | Use the agent | Production-ready responses |
+
+### Phase 2: Policy Distillation (Coming Soon)
+
+```
+RL ENVIRONMENT                    POLICY TRAINING                 INFERENCE
+┌─────────────────┐              ┌─────────────────┐             ┌──────────┐
+│ query_agent     │   on-policy  │  Small LM       │   deploy    │ Fast,    │
+│ tool_mocker     │─────────────▶│  (fine-tuned)   │────────────▶│ cheap    │
+│ reward_fn       │   rollouts   │                 │             │ model    │
+└─────────────────┘              └─────────────────┘             └──────────┘
+```
+
+Use the RL environment to train a smaller, domain-specific model:
+
+- **Environment**: Gemini-powered simulation provides realistic interactions
+- **Policy**: Train via PPO/DPO on collected trajectories  
+- **Reward Model**: `reward_fn` scores completions for RLHF
+- **Distillation**: Transfer capabilities from large LM to small, deployable model
+
 ## Quick Start
 
 ```bash
@@ -89,6 +124,7 @@ agent_gym/
 ## Dependencies
 
 - `google-generativeai` - Gemini SDK for LLM capabilities
+- `dspy-ai` - Prompt optimization framework
 - `pydantic` - Data validation and schemas
 - `numpy` - Numerical utilities
 - `rich` - Pretty console output
