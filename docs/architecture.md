@@ -3,47 +3,84 @@
 ## System Overview
 
 ```
-┌─────────────┐     ┌──────────────────────────────────────────┐
-│   Traces    │────▶│         create_environment()             │
-│   (JSON)    │     └──────────────────────────────────────────┘
-└─────────────┘                        │
-                                       ▼
-                    ┌──────────────────────────────────────────┐
-                    │              Returns 3 callables          │
-                    ├──────────────┬─────────────┬─────────────┤
-                    │ query_agent  │ tool_mocker │  reward_fn  │
-                    └──────────────┴─────────────┴─────────────┘
+SGD Dataset ──▶ OptimizationRunner ──▶ Saved Outputs
+                     │                      │
+                     │                      ├── agent.json (DSPy module)
+                     │                      └── agent_result.json (metrics)
+                     │
+                     ├── Load data
+                     ├── Build tool catalog
+                     ├── Create baseline agent
+                     ├── Run optimizer
+                     └── Evaluate & save
 ```
 
-## Data Flow
+---
 
-1. **Ingestion**: Raw traces → `trace_parser` → normalized `TraceSchema`
-2. **Environment Creation**: Parsed traces initialize all three components
-3. **Runtime**: Agent queries → tool mocks → reward scoring
+## Components
 
-## Component Contracts
+```
+src/
+├── optimization/    OptimizationRunner, OptimizationResult
+├── agent/           SGDAgentModule, build_tool_catalog
+├── data/            SGDLoader, SGDDialogue, SGDSchema
+├── environment/     SGDEnvironment, Observation
+├── reward/          LLMJudge, ground truth comparison
+└── tool_mocker/     SGDToolMocker
+```
 
-### QueryAgent
+---
+
+## Key Classes
+
+### OptimizationRunner
 ```python
-def query(user_message: str, context: Optional[Dict]) -> str
+runner = OptimizationRunner(data_path, strategy, num_train, callback, output_path)
+result = runner.run()  # Returns OptimizationResult
 ```
-- Stateless per call (context passed explicitly)
-- Uses Gemini for generation
-- System prompt derived from trace patterns
 
-### ToolMocker
+### SGDAgentModule
 ```python
-def mock(tool_name: str, tool_args: Dict) -> Any
+agent = SGDAgentModule(tool_catalog)
+result = agent(user_message, conversation_history)
+# result.response, result.tool_call, result.reasoning
 ```
-- Exact match first, then fuzzy match
-- Falls back to Gemini generation for unseen tools
-- Returns JSON-serializable responses
 
-### RewardFunction
+### SGDEnvironment
 ```python
-def score(response: str, ground_truth: Optional[str], context: Optional[Dict]) -> float
+env = create_sgd_environment(data_path, reward_mode, limit)
+obs = env.reset(dialogue_idx)
+obs, reward, done, info = env.step(action)
 ```
-- Returns float in [-1.0, 1.0]
-- Combines semantic similarity + quality assessment
-- Handles missing ground truth gracefully
 
+---
+
+## Reward Modes
+
+| Mode | Description |
+|------|-------------|
+| `ground_truth` | Compare to expected response from dataset |
+| `llm_judge` | Gemini evaluates response quality |
+| `hybrid` | 50/50 blend |
+
+---
+
+## Output Files
+
+**agent.json** (DSPy format)
+```json
+{"respond.predict": {"demos": [...], "signature": {...}}}
+```
+
+**agent_result.json**
+```json
+{
+  "baseline_score": 0.53,
+  "optimized_score": 0.55,
+  "improvement_pct": 3.8,
+  "initial_prompt": "...",
+  "optimized_prompt": "...",
+  "few_shot_demos": [...],
+  "events": [...]
+}
+```
