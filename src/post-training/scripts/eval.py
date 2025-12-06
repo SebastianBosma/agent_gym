@@ -40,7 +40,7 @@ def main() -> None:
     ap.add_argument("--eval_jsonl", type=str, default="data/processed/eval.with_rubric.jsonl")
     ap.add_argument("--base_model", type=str, default="google/gemma-2-2b-it")
     ap.add_argument("--trained_model_dir", type=str, required=True)
-    ap.add_argument("--gemini_model", type=str, default=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    ap.add_argument("--gemini_model", type=str, default=os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"))
     ap.add_argument("--n", type=int, default=50)
     args = ap.parse_args()
 

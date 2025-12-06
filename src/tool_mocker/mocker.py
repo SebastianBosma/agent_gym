@@ -63,7 +63,10 @@ class ToolMocker:
     def _ensure_lm_configured(self):
         """Configure DSPy with Gemini on first use."""
         if not self._lm_configured:
-            lm = dspy.Google("models/gemini-1.5-pro-latest")
+            import os
+            api_key = os.getenv("GOOGLE_API_KEY")
+            # Use Gemini 3 Pro for complex generation tasks
+            lm = dspy.LM("gemini/gemini-3-pro-preview", api_key=api_key)
             dspy.settings.configure(lm=lm)
             self._lm_configured = True
     

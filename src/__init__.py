@@ -2,9 +2,18 @@
 Agent Gym - Convert traces into RL environments.
 
 Main API:
+    # For generic traces:
     from agent_gym import create_environment
-    
     query_agent, tool_mocker, reward_fn = create_environment(traces)
+    
+    # For SGD dataset:
+    from agent_gym import create_sgd_environment
+    env = create_sgd_environment("data/raw/schema_guided_dialogue")
+    
+    # For optimization:
+    from agent_gym import OptimizationRunner
+    runner = OptimizationRunner(data_path, strategy="mipro", callback=my_callback)
+    result = runner.run()
 """
 
 from pathlib import Path
@@ -18,6 +27,13 @@ from .trace_parser import parse_traces
 from .agent import QueryAgent
 from .tool_mocker import ToolMocker
 from .reward import RewardFunction
+
+# SGD-specific imports
+from .data import SGDLoader
+from .environment import SGDEnvironment, create_sgd_environment, AgentAction
+
+# Optimization imports
+from .optimization import OptimizationRunner, OptimizationResult, OptimizationEvent
 
 
 def create_environment(
@@ -54,5 +70,17 @@ def create_environment(
     return agent.query, mocker.mock, reward.score
 
 
-__all__ = ["create_environment"]
+__all__ = [
+    # Generic environment
+    "create_environment",
+    # SGD environment
+    "SGDLoader",
+    "SGDEnvironment",
+    "create_sgd_environment",
+    "AgentAction",
+    # Optimization
+    "OptimizationRunner",
+    "OptimizationResult",
+    "OptimizationEvent",
+]
 

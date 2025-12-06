@@ -1,61 +1,73 @@
-# DSPy Optimization
-
-## Overview
-
-Both `QueryAgent` and `ToolMocker` are built on DSPy modules, making them optimizable with traces as training data.
+# Prompt Optimization
 
 ## Quick Start
 
 ```python
-from dspy.teleprompt import BootstrapFewShot
-from src import create_environment
+from src.optimization import OptimizationRunner
 
-# Create environment
-query_agent, tool_mocker, reward_fn = create_environment(traces)
+runner = OptimizationRunner(
+    data_path="data/raw/schema_guided_dialogue",
+    strategy="mipro",  # or "bootstrap"
+    num_train=50,
+    output_path="checkpoints/my_agent.json",
+)
+result = runner.run()
 
-# Get the underlying DSPy module and training examples
-agent_module = query_agent.__self__.get_module()
-training_examples = query_agent.__self__.get_training_examples()
-
-# Define metric using reward function
-def metric(example, pred):
-    return reward_fn(pred.response, example.response)
-
-# Optimize
-optimizer = BootstrapFewShot(metric=metric, max_bootstrapped_demos=4)
-optimized_module = optimizer.compile(agent_module, trainset=training_examples)
-
-# Use optimized module
-query_agent.__self__.set_module(optimized_module)
+print(f"Improvement: {result.improvement_pct:+.1f}%")
 ```
 
-## Available Optimizers
+---
 
-| Optimizer | Use Case |
-|-----------|----------|
-| `BootstrapFewShot` | Quick, finds good few-shot examples |
-| `BootstrapFewShotWithRandomSearch` | More thorough search |
-| `MIPRO` | Full prompt optimization |
+## Strategies
 
-## Training Data
+| Strategy | Speed | What it does |
+|----------|-------|--------------|
+| `bootstrap` | ~10s | Finds good few-shot examples |
+| `mipro` | ~3min | Tests prompt rewrites + few-shot |
 
-Both components provide `get_training_examples()`:
+MIPROv2 may keep original instructions if they perform best—improvement often comes from better few-shot selection.
+
+---
+
+## Scoring Metric
 
 ```python
-# Agent examples: (user_message, history) -> response
-agent_examples = query_agent.__self__.get_training_examples()
-
-# Tool examples: (tool_name, args) -> response
-tool_examples = tool_mocker.__self__.get_training_examples()
+score = (response_similarity + tool_accuracy) / 2
 ```
 
-## Saving/Loading
+| Component | How |
+|-----------|-----|
+| Response similarity | Jaccard word overlap |
+| Tool accuracy | 1.0 if name+args match, 0.5 if name only, 0.0 otherwise |
+
+---
+
+## Results
 
 ```python
-# Save optimized module
-optimized_module.save("checkpoints/agent_v1.json")
-
-# Load later
-agent_module.load("checkpoints/agent_v1.json")
+result.success           # bool
+result.baseline_score    # Before optimization
+result.optimized_score   # After optimization
+result.improvement_pct   # Percentage change
+result.initial_prompt    # Starting prompt
+result.optimized_prompt  # Final prompt
+result.few_shot_demos    # Added examples
+result.events            # Event log
 ```
 
+### Saving/Loading
+
+```python
+# Auto-saves when output_path set
+result.save("checkpoints/result.json")
+result = OptimizationResult.load("checkpoints/result.json")
+```
+
+---
+
+## Tips
+
+- Use `num_train=50+` for reliable results
+- Use `num_candidates=5-10` for MIPRO
+- Check `result.initial_prompt != result.optimized_prompt` to see if instructions changed
+- Review `result.few_shot_demos` to understand what examples were selected

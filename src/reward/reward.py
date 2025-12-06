@@ -49,7 +49,8 @@ class RewardFunction:
     def model(self):
         """Lazy-load Gemini model."""
         if self._model is None:
-            self._model = genai.GenerativeModel('gemini-pro')
+            # Use Gemini 3 Pro for high-quality evaluation
+            self._model = genai.GenerativeModel('gemini-3-pro-preview')
         return self._model
     
     def score(

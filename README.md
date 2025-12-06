@@ -1,111 +1,105 @@
 # Agent Gym
 
-Convert conversation traces into RL environments for training AI agents.
+Train and optimize task-oriented dialogue agents using conversation traces as training data.
 
 ## Overview
 
-Agent Gym takes historical conversation logs (e.g., customer service transcripts) and transforms them into a reinforcement learning environment. This enables training agents that can:
+Agent Gym transforms conversation datasets (like Schema-Guided Dialogue) into RL environments for:
 
-- Respond to user queries naturally
-- Use tools appropriately based on context
-- Optimize for customer satisfaction and task completion
-
-## User Journey
-
-```
-1. COLLECT        2. CONVERT         3. CREATE ENVIRONMENT        4. DEPLOY
-   Raw Logs  ───▶  JSON Traces  ───▶  (parse + optimize)    ───▶  Agent
-   (CSV, DB)       (normalized)       query_agent                  (production)
-                                      tool_mocker
-                                      reward_fn
-```
-
-| Step | What You Do | Output |
-|------|-------------|--------|
-| 1. Collect | Export customer service logs | Raw data files |
-| 2. Convert | Normalize to trace schema | `data/processed/*.json` |
-| 3. Create | `create_environment(traces)` | Optimized query_agent, tool_mocker, reward_fn |
-| 4. Deploy | Use the agent | Production-ready responses |
-
-### Phase 2: Policy Distillation (Coming Soon)
-
-```
-RL ENVIRONMENT                    POLICY TRAINING                 INFERENCE
-┌─────────────────┐              ┌─────────────────┐             ┌──────────┐
-│ query_agent     │   on-policy  │  Small LM       │   deploy    │ Fast,    │
-│ tool_mocker     │─────────────▶│  (fine-tuned)   │────────────▶│ cheap    │
-│ reward_fn       │   rollouts   │                 │             │ model    │
-└─────────────────┘              └─────────────────┘             └──────────┘
-```
-
-Use the RL environment to train a smaller, domain-specific model:
-
-- **Environment**: Gemini-powered simulation provides realistic interactions
-- **Policy**: Train via PPO/DPO on collected trajectories  
-- **Reward Model**: `reward_fn` scores completions for RLHF
-- **Distillation**: Transfer capabilities from large LM to small, deployable model
-
-## Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/your-org/agent_gym.git
-cd agent_gym
-
-# Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
+- **Training** agents to respond naturally and use tools appropriately
+- **Optimizing** prompts with DSPy (BootstrapFewShot, MIPROv2)
+- **Evaluating** agents with ground truth or LLM-as-judge
 
 ## Quick Start
 
 ```bash
-# Install dependencies (if not already done in setup)
+# Setup
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
-# Copy .env.example and add your Gemini API key
-cp .env.example .env
-# Edit .env and set GOOGLE_API_KEY=your-actual-key
+# Set your Gemini API key
+export GOOGLE_API_KEY=your-key-here
 
-# Run the demo
-python examples/customer_service.py
+# Run optimization
+python -c "
+from src.optimization import OptimizationRunner
+
+runner = OptimizationRunner(
+    data_path='data/raw/schema_guided_dialogue',
+    strategy='bootstrap',  # or 'mipro'
+    num_train=50,
+    output_path='checkpoints/my_agent.json',
+)
+result = runner.run()
+print(f'Improvement: {result.improvement_pct:+.1f}%')
+"
 ```
 
-## Main API
+## Features
+
+| Feature | Description |
+|---------|-------------|
+| **SGD Dataset** | Pre-loaded Schema-Guided Dialogue with 45 services |
+| **Dynamic Tool Catalog** | Auto-extracted from dataset schemas |
+| **BootstrapFewShot** | Fast optimization via example selection |
+| **MIPROv2** | Gemini-powered prompt rewriting |
+| **LLM-as-Judge** | Reward without ground truth dependency |
+| **Result Saving** | Full metrics, prompts, and event logs |
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     OptimizationRunner                          │
+├─────────────────────────────────────────────────────────────────┤
+│  1. Load SGD data (dialogues + schemas)                         │
+│  2. Build tool catalog from schemas                             │
+│  3. Create baseline agent with prompt                           │
+│  4. Run optimizer (BootstrapFewShot or MIPROv2)                 │
+│  5. Evaluate and save results                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Saved Outputs                                │
+├─────────────────────────────────────────────────────────────────┤
+│  checkpoints/agent.json        - DSPy module (demos + prompt)   │
+│  checkpoints/agent_result.json - Metrics, prompts, events       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Usage
 
 ```python
-from src import create_environment
+from src.optimization import OptimizationRunner, OptimizationResult
 
-# Load your traces (list of conversation dicts)
-traces = [...]
+# Run optimization
+runner = OptimizationRunner(
+    data_path="data/raw/schema_guided_dialogue",
+    strategy="mipro",
+    num_train=50,
+    output_path="checkpoints/agent.json",
+)
+result = runner.run()
 
-# Create the RL environment
-query_agent, tool_mocker, reward_fn = create_environment(traces)
-
-# Use the components
-response = query_agent("I want to cancel my subscription")
-tool_result = tool_mocker("lookup_account", {"user_id": "123"})
-score = reward_fn(response, ground_truth="Expected response...")
+# Load saved results
+result = OptimizationResult.load("checkpoints/agent_result.json")
+print(result.initial_prompt)
+print(result.few_shot_demos)
 ```
 
-## Trace Format
+## Scoring Metric
 
-Traces should be normalized to this JSON schema:
+Optimization uses a combined metric:
 
-```json
-{
-  "conversation_id": "conv_001",
-  "messages": [
-    {"role": "user", "content": "User message here"},
-    {"role": "assistant", "content": "Agent response", "tool_calls": [...]},
-    {"role": "tool", "name": "tool_name", "result": {...}}
-  ],
-  "outcome": "resolved",
-  "satisfaction_score": 4.5
-}
+| Component | Weight | Description |
+|-----------|--------|-------------|
+| Response Similarity | 50% | Word overlap (Jaccard) with ground truth |
+| Tool Accuracy | 50% | Correct tool name + arguments |
+
+```python
+final_score = (response_similarity + tool_accuracy) / 2
 ```
 
 ## Project Structure
@@ -113,38 +107,59 @@ Traces should be normalized to this JSON schema:
 ```
 agent_gym/
 ├── src/
-│   ├── __init__.py          # create_environment() factory
-│   ├── trace_parser/         # Convert traces to unified format
-│   ├── environment/          # RL environment wrapper
-│   ├── tool_mocker/          # Mock tool responses from data
-│   ├── reward/               # Reward function
-│   └── agent/                # Gemini-powered query agent
+│   ├── agent/           # SGDAgentModule, tool catalog builder
+│   ├── data/            # SGDLoader, dialogue/schema parsing
+│   ├── environment/     # SGDEnvironment, reward modes
+│   ├── optimization/    # OptimizationRunner, result saving
+│   ├── reward/          # LLMJudge, ground truth comparison
+│   └── tool_mocker/     # SGDToolMocker for API simulation
 ├── data/
-│   ├── raw/                  # Raw trace files
-│   └── processed/            # Normalized JSON traces
-├── examples/
-│   └── customer_service.py   # Demo script
-└── scripts/
-    └── run_example.py        # Quick-run utility
+│   └── raw/schema_guided_dialogue/  # SGD dataset
+├── checkpoints/         # Saved agents and results
+├── docs/                # Documentation
+└── scripts/             # Utility scripts
 ```
 
-## Components
+## Roadmap
 
-| Component | Purpose |
-|-----------|---------|
-| `trace_parser` | Parse and validate traces into consistent schema |
-| `tool_mocker` | Return realistic tool responses based on trace patterns |
-| `reward` | Score agent responses (semantic similarity + quality) |
-| `agent` | Gemini-powered agent that learns from trace context |
+### Phase 1: Prompt Optimization ✅
+- SGD dataset integration
+- BootstrapFewShot + MIPROv2
+- LLM-as-judge reward
+- Result saving/loading
 
-## Dependencies
+### Phase 2: Policy Distillation (Next)
+```
+RL Environment              Policy Training              Inference
+┌─────────────────┐        ┌─────────────────┐         ┌──────────┐
+│ Gemini agent    │  PPO/  │  Small LM       │ deploy  │ Fast,    │
+│ + tool mocker   │───────▶│  (fine-tuned)   │────────▶│ cheap    │
+│ + reward_fn     │ DPO    │                 │         │ model    │
+└─────────────────┘        └─────────────────┘         └──────────┘
+```
 
-- `google-generativeai` - Gemini SDK for LLM capabilities
-- `dspy-ai` - Prompt optimization framework
-- `pydantic` - Data validation and schemas
-- `numpy` - Numerical utilities
-- `rich` - Pretty console output
-- `python-dotenv` - Environment variable management
+Use the RL environment to distill a smaller, deployable model:
+- Collect on-policy rollouts from Gemini agent
+- Train via PPO/DPO on trajectories
+- Deploy fast, domain-specific model
+
+## Model
+
+All components use `gemini-3-pro-preview` by default.
+
+## Documentation
+
+- [Frontend Integration](docs/frontend_integration.md) - API for building UIs
+- [Optimization Guide](docs/optimization.md) - DSPy optimization details
+- [Architecture](docs/architecture.md) - System design
+- [Trace Schema](docs/trace_schema.md) - Data format
+
+## Requirements
+
+- Python 3.10+
+- `google-generativeai` - Gemini SDK
+- `dspy-ai>=2.5` - Prompt optimization
+- `litellm` - Model routing
 
 ## License
 
