@@ -63,3 +63,4 @@ data/processed/
 *.log
 logs/
 
+data/dstc8-schema-guided-dialogue/
