@@ -34,7 +34,7 @@ from src.agent.sgd_agent import (
 )
 
 
-def configure_dspy(model: str = "gemini-2.5-flash"):
+def configure_dspy(model: str = "gemini-3-pro-preview"):
     """Configure DSPy with Gemini."""
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -204,8 +204,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gemini-2.5-flash",
-        help="Gemini model to use (default: gemini-2.5-flash)",
+        default="gemini-3-pro-preview",
+        help="Gemini model to use (default: gemini-3-pro-preview)",
     )
     parser.add_argument(
         "--output",

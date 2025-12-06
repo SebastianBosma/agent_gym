@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gemini_model",
         type=str,
-        default=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        default=os.getenv("GEMINI_MODEL", "gemini-3-pro-preview"),
         help="Gemini model name for reward (judge).",
     )
 

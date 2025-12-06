@@ -11,7 +11,7 @@ runner = OptimizationRunner(
     num_train=50,
     num_eval=10,
     num_candidates=5,        # MIPRO prompt variants
-    model="gemini-2.5-flash",
+    model="gemini-3-pro-preview",
     callback=on_event,       # Progress callback
     output_path="checkpoints/my_agent.json",
 )
