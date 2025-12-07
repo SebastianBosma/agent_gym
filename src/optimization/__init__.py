@@ -1,6 +1,22 @@
-"""Optimization module - DSPy prompt optimization with progress tracking."""
+"""Optimization module - Create optimized RL environments for dialogue training."""
 
-from .runner import OptimizationRunner, OptimizationResult, OptimizationEvent
+from .runner import (
+    EnvironmentRunner,
+    EnvironmentResult,
+    OptimizationEvent,
+    run_optimization,
+    # Backward compatibility aliases
+    OptimizationRunner,
+    OptimizationResult,
+)
 
-__all__ = ["OptimizationRunner", "OptimizationResult", "OptimizationEvent"]
+__all__ = [
+    "EnvironmentRunner",
+    "EnvironmentResult",
+    "OptimizationEvent",
+    "run_optimization",
+    # Backward compatibility
+    "OptimizationRunner",
+    "OptimizationResult",
+]
 

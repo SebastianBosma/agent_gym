@@ -1,14 +1,16 @@
 # Agent Gym
 
-Train and optimize task-oriented dialogue agents using conversation traces as training data.
+Create RL environments from dialogue traces to train customer service agents.
 
 ## Overview
 
-Agent Gym transforms conversation datasets (like Schema-Guided Dialogue) into RL environments for:
+Agent Gym transforms conversation datasets (like Schema-Guided Dialogue) into RL environments with:
 
-- **Training** agents to respond naturally and use tools appropriately
-- **Optimizing** prompts with DSPy (BootstrapFewShot, MIPROv2)
-- **Evaluating** agents with ground truth or LLM-as-judge
+- **Simulated User** - DSPy-optimized agent that generates realistic user messages
+- **Tool Mocker** - Mocks API calls using recorded responses
+- **Reward Function** - LLM-as-judge (Gemini) that scores agent responses
+
+Use this environment to train a small model (e.g., Gemma via GRPO) to act as a customer service agent.
 
 ## Quick Start
 
@@ -20,139 +22,178 @@ pip install -r requirements.txt
 
 # Set your Gemini API key
 export GOOGLE_API_KEY=your-key-here
+```
 
-# Run optimization
-python -c "
-from src.optimization import OptimizationRunner
+### Create an Environment
 
-runner = OptimizationRunner(
-    data_path='data/raw/schema_guided_dialogue',
-    strategy='bootstrap',  # or 'mipro'
-    num_train=50,
-    output_path='checkpoints/my_agent.json',
+```python
+from agent_gym import create_environment
+
+# Create environment components
+simulated_user, tool_mocker, reward_fn = create_environment(
+    "data/raw/schema_guided_dialogue"
 )
-result = runner.run()
-print(f'Improvement: {result.improvement_pct:+.1f}%')
-"
+
+# Get a user goal and generate initial message
+goal = simulated_user.get_random_goal()
+user_message = simulated_user.generate_initial_message(goal)
+# "I'm looking for a restaurant in Oakland"
+
+# Your agent responds...
+agent_response = "What type of cuisine would you like?"
+
+# Get next user message (dynamic, based on what agent said)
+next_message = simulated_user.generate_response(
+    goal=goal,
+    history=f"USER: {user_message}\nASSISTANT: {agent_response}",
+    assistant_message=agent_response,
+)
+# "Italian please"
+
+# Score the agent's response
+score = reward_fn.evaluate(
+    history=[],
+    user_message=user_message,
+    response=agent_response,
+    available_tools=[...],
+)
+print(score.quality_score)  # 0.75
+```
+
+### Optimize the Simulated User
+
+```bash
+# Train simulated user to generate realistic messages
+python scripts/optimize_simulated_user.py \
+    --strategy bootstrap \
+    --num-train 100 \
+    --output checkpoints/simulated_user.json
+```
+
+Then use the optimized checkpoint:
+
+```python
+simulated_user, tool_mocker, reward_fn = create_environment(
+    "data/raw/schema_guided_dialogue",
+    simulated_user_checkpoint="checkpoints/simulated_user.json",
+)
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      RL ENVIRONMENT                             │
+│                                                                 │
+│   SimulatedUserAgent ──► generates user messages (DSPy)         │
+│          │                                                      │
+│          ▼                                                      │
+│   Your Agent (Gemma) ──► generates responses + tool calls       │
+│          │                                                      │
+│          ▼                                                      │
+│   ToolMocker ──► returns mocked API results                     │
+│          │                                                      │
+│          ▼                                                      │
+│   LLMJudge ──► scores response (reward signal)                  │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    GRPO updates agent weights
 ```
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **SGD Dataset** | Pre-loaded Schema-Guided Dialogue with 45 services |
-| **Dynamic Tool Catalog** | Auto-extracted from dataset schemas |
-| **BootstrapFewShot** | Fast optimization via example selection |
-| **MIPROv2** | Gemini-powered prompt rewriting |
-| **LLM-as-Judge** | Reward without ground truth dependency |
-| **Result Saving** | Full metrics, prompts, and event logs |
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     OptimizationRunner                          │
-├─────────────────────────────────────────────────────────────────┤
-│  1. Load SGD data (dialogues + schemas)                         │
-│  2. Build tool catalog from schemas                             │
-│  3. Create baseline agent with prompt                           │
-│  4. Run optimizer (BootstrapFewShot or MIPROv2)                 │
-│  5. Evaluate and save results                                   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Saved Outputs                                │
-├─────────────────────────────────────────────────────────────────┤
-│  checkpoints/agent.json        - DSPy module (demos + prompt)   │
-│  checkpoints/agent_result.json - Metrics, prompts, events       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Usage
-
-```python
-from src.optimization import OptimizationRunner, OptimizationResult
-
-# Run optimization
-runner = OptimizationRunner(
-    data_path="data/raw/schema_guided_dialogue",
-    strategy="mipro",
-    num_train=50,
-    output_path="checkpoints/agent.json",
-)
-result = runner.run()
-
-# Load saved results
-result = OptimizationResult.load("checkpoints/agent_result.json")
-print(result.initial_prompt)
-print(result.few_shot_demos)
-```
-
-## Scoring Metric
-
-Optimization uses a combined metric:
-
-| Component | Weight | Description |
-|-----------|--------|-------------|
-| Response Similarity | 50% | Word overlap (Jaccard) with ground truth |
-| Tool Accuracy | 50% | Correct tool name + arguments |
-
-```python
-final_score = (response_similarity + tool_accuracy) / 2
-```
+| **Simulated User** | DSPy-optimized to generate realistic user messages |
+| **Dynamic Conversations** | Not fixed traces - evolves based on agent responses |
+| **Tool Mocker** | Mocks 45+ SGD services with realistic responses |
+| **LLM-as-Judge** | Gemini evaluates response quality (no ground truth needed) |
+| **Multi-Turn** | Supports up to 10 turns per episode |
+| **Checkpoint Saving** | Save/load optimized simulated user modules |
 
 ## Project Structure
 
 ```
 agent_gym/
 ├── src/
-│   ├── agent/           # SGDAgentModule, tool catalog builder
-│   ├── data/            # SGDLoader, dialogue/schema parsing
-│   ├── environment/     # SGDEnvironment, reward modes
-│   ├── optimization/    # OptimizationRunner, result saving
-│   ├── reward/          # LLMJudge, ground truth comparison
-│   └── tool_mocker/     # SGDToolMocker for API simulation
-├── data/
-│   └── raw/schema_guided_dialogue/  # SGD dataset
-├── checkpoints/         # Saved agents and results
-├── docs/                # Documentation
-└── scripts/             # Utility scripts
+│   ├── agent/
+│   │   ├── simulated_user.py   # SimulatedUserAgent, UserGoal
+│   │   └── sgd_agent.py        # SGDAgentModule (prompt optimization)
+│   ├── data/
+│   │   └── sgd_loader.py       # SGDLoader, dialogue parsing
+│   ├── environment/
+│   │   ├── multi_turn_env.py   # MultiTurnEnvironment
+│   │   └── sgd_env.py          # SGDEnvironment (trace replay)
+│   ├── reward/
+│   │   └── llm_judge.py        # LLMJudge, CachedLLMJudge
+│   └── tool_mocker/
+│       └── sgd_mocker.py       # SGDToolMocker
+├── scripts/
+│   ├── optimize_simulated_user.py  # DSPy optimization for user sim
+│   └── optimize_agent.py           # DSPy optimization for agent
+├── checkpoints/                # Saved models and results
+├── data/raw/schema_guided_dialogue/  # SGD dataset
+└── docs/                       # Documentation
 ```
 
-## Roadmap
+## Using MultiTurnEnvironment
 
-### Phase 1: Prompt Optimization ✅
-- SGD dataset integration
-- BootstrapFewShot + MIPROv2
-- LLM-as-judge reward
-- Result saving/loading
+For a more standard RL interface:
 
-### Phase 2: Policy Distillation (Next)
+```python
+from agent_gym import create_multi_turn_environment, AgentAction
+
+env = create_multi_turn_environment(
+    "data/raw/schema_guided_dialogue",
+    simulated_user_checkpoint="checkpoints/simulated_user.json",
+    max_turns=10,
+)
+
+obs = env.reset()
+done = False
+
+while not done:
+    # Your agent produces an action
+    action = AgentAction(
+        type="response",
+        response="What city are you looking for?",
+        tool_call=None,  # or {"name": "FindRestaurants", "args": {...}}
+    )
+    
+    obs, reward, done, info = env.step(action)
+    print(f"User: {obs.user_message}")
+    print(f"Reward: {reward}")
 ```
-RL Environment              Policy Training              Inference
-┌─────────────────┐        ┌─────────────────┐         ┌──────────┐
-│ Gemini agent    │  PPO/  │  Small LM       │ deploy  │ Fast,    │
-│ + tool mocker   │───────▶│  (fine-tuned)   │────────▶│ cheap    │
-│ + reward_fn     │ DPO    │                 │         │ model    │
-└─────────────────┘        └─────────────────┘         └──────────┘
+
+## Training Pipeline
+
+### Phase 1: Optimize Simulated User
+
+```bash
+python scripts/optimize_simulated_user.py --strategy bootstrap
 ```
 
-Use the RL environment to distill a smaller, deployable model:
-- Collect on-policy rollouts from Gemini agent
-- Train via PPO/DPO on trajectories
-- Deploy fast, domain-specific model
+This teaches the simulated user to generate messages that match real users in the SGD dataset.
 
-## Model
+### Phase 2: Train Agent with GRPO
 
-All components use `gemini-3-pro-preview` by default.
+Use the optimized environment to train your agent (Gemma) via GRPO:
+
+```bash
+# See src/post-training/ for GRPO training scripts
+cd src/post-training
+uv run python scripts/train_grpo.py \
+    --model_name google/gemma-2-2b-it \
+    --use_lora
+```
 
 ## Documentation
 
-- [Frontend Integration](docs/frontend_integration.md) - API for building UIs
-- [Optimization Guide](docs/optimization.md) - DSPy optimization details
-- [Architecture](docs/architecture.md) - System design
-- [Trace Schema](docs/trace_schema.md) - Data format
+- [Architecture](docs/architecture.md) - System design and components
+- [Post-Training](docs/post_training.md) - GRPO fine-tuning guide
+- [Optimization](docs/optimization.md) - DSPy optimization details
 
 ## Requirements
 
