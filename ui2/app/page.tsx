@@ -8,12 +8,13 @@ import { RewardChart } from "@/components/RewardChart";
 import { CompareViewer } from "@/components/CompareViewer";
 import { ChatMessage, PolicyStats, TrainingStep, CompareResult } from "@/lib/types";
 import { POLICIES } from "@/lib/policies";
+import { Sparkles, Brain, Target } from "lucide-react";
 
 export default function Home() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       role: "system",
-      content: "Welcome to RL Post-Training Demo! This application demonstrates reinforcement learning post-training using offline dialogue traces (DSTC8-style). We have a small dataset of conversation turns compiled into a proxy RL environment. You can run training to search for the best system prompt (policy) for our student model (gemini-2.0-flash-lite) using a teacher model (gemini-3-pro-preview) for evaluation via a simple ε-greedy bandit algorithm."
+      content: "👋 Welcome! This demo shows how to optimize AI assistant prompts using reinforcement learning. Run training to find the best policy using a simple ε-greedy bandit algorithm."
     }
   ]);
   
@@ -35,7 +36,7 @@ export default function Home() {
     setIsTraining(true);
     setMessages(prev => [...prev, {
       role: "system",
-      content: `Starting training for ${numSteps} steps with ε=${epsilon}...`
+      content: `🚀 Starting ${numSteps}-step training with ε=${epsilon.toFixed(2)}...`
     }]);
 
     try {
@@ -60,7 +61,7 @@ export default function Home() {
           ...prev,
           {
             role: "system",
-            content: `Step ${step.stepIndex}/${numSteps} — sampled env \`${step.envId}\``
+            content: `Step ${step.stepIndex}/${numSteps} — ${step.envId}`
           },
           {
             role: "env",
@@ -76,7 +77,7 @@ export default function Home() {
           },
           {
             role: "system",
-            content: `Updated avg reward for ${step.policyName}: ${step.policyStatsAfter.find(s => s.policyId === step.policyId)?.avgReward.toFixed(2) || 'N/A'}`
+            content: `📊 ${step.policyName} avg: ${step.policyStatsAfter.find(s => s.policyId === step.policyId)?.avgReward.toFixed(3) || 'N/A'}`
           }
         ]);
 
@@ -87,17 +88,19 @@ export default function Home() {
         setChartData(prev => [...prev, { stepIndex: step.stepIndex, bestAvgReward: bestAvg }]);
       }
 
+      const bestPolicy = finalStats.reduce((best, curr) => 
+        curr.avgReward > best.avgReward ? curr : best
+      );
+
       setMessages(prev => [...prev, {
         role: "system",
-        content: `Training complete! Best policy: ${finalStats.reduce((best, curr) => 
-          curr.avgReward > best.avgReward ? curr : best
-        ).policyName} with avg reward ${Math.max(...finalStats.map(s => s.avgReward)).toFixed(2)}`
+        content: `✅ Training complete! Best: **${bestPolicy.policyName}** (${bestPolicy.avgReward.toFixed(3)})`
       }]);
 
     } catch (error) {
       setMessages(prev => [...prev, {
         role: "system",
-        content: `Error during training: ${error instanceof Error ? error.message : 'Unknown error'}`
+        content: `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`
       }]);
     } finally {
       setIsTraining(false);
@@ -108,7 +111,7 @@ export default function Home() {
     setMessages([
       {
         role: "system",
-        content: "System reset. Ready to start a new training session."
+        content: "🔄 System reset. Ready for a new training session."
       }
     ]);
     setPolicyStats(POLICIES.map(policy => ({
@@ -125,7 +128,7 @@ export default function Home() {
   const handleCompare = async () => {
     setMessages(prev => [...prev, {
       role: "system",
-      content: "Running before vs after comparison on held-out example..."
+      content: "🔍 Running before vs after comparison..."
     }]);
 
     try {
@@ -142,35 +145,48 @@ export default function Home() {
       const result: CompareResult = await response.json();
       setCompareResult(result);
 
+      const improvement = result.best.score - result.baseline.score;
+      const sign = improvement >= 0 ? '+' : '';
+      
       setMessages(prev => [...prev, {
         role: "system",
-        content: `Comparison complete! Baseline: ${result.baseline.score.toFixed(2)} vs Best: ${result.best.score.toFixed(2)} (Improvement: ${(result.best.score - result.baseline.score >= 0 ? '+' : '')}${(result.best.score - result.baseline.score).toFixed(2)})`
+        content: `📈 Baseline: ${result.baseline.score.toFixed(3)} → Best: ${result.best.score.toFixed(3)} (${sign}${improvement.toFixed(3)})`
       }]);
 
     } catch (error) {
       setMessages(prev => [...prev, {
         role: "system",
-        content: `Error during comparison: ${error instanceof Error ? error.message : 'Unknown error'}`
+        content: `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`
       }]);
     }
   };
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen bg-gradient-to-br from-background to-muted/20">
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="border-b p-4">
-          <h1 className="text-2xl font-bold">RL Post-Training Demo</h1>
-          <p className="text-sm text-muted-foreground">
-            Prompt-as-Policy Optimization via Gemini LLM Calls
-          </p>
+        <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-primary/10">
+              <Brain className="w-6 h-6 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">RL Post-Training</h1>
+              <p className="text-sm text-muted-foreground">
+                Optimize prompts with ε-greedy bandit learning
+              </p>
+            </div>
+          </div>
         </header>
-        <ChatWindow messages={messages} />
+        
+        <div className="flex-1 overflow-hidden p-4">
+          <ChatWindow messages={messages} />
+        </div>
       </div>
 
       {/* Side Panel */}
-      <div className="w-[400px] border-l flex flex-col overflow-hidden">
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
+      <div className="w-[420px] border-l bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 flex flex-col overflow-hidden">
+        <div className="p-6 space-y-6 overflow-y-auto flex-1">
           <ControlsPanel 
             onRunTraining={handleRunTraining}
             onReset={handleReset}
@@ -180,7 +196,7 @@ export default function Home() {
           
           <PolicyStatsTable stats={policyStats} />
           
-          <RewardChart steps={chartData} />
+          {chartData.length > 0 && <RewardChart steps={chartData} />}
           
           {compareResult && <CompareViewer result={compareResult} />}
         </div>
