@@ -87,7 +87,7 @@ def upload_data(file_content_b64: str):
     timeout=7200,  # 2 hours max
 )
 def train(
-    model_name: str = "google/gemma-2-2b-it",
+    model_name: str = "gpt2",
     gemini_model: str = "gemini-3-pro-preview",
     max_steps: int = 40,
     learning_rate: float = 5e-6,
@@ -97,8 +97,8 @@ def train(
     use_lora: bool = True,
     lora_r: int = 16,
     lora_alpha: int = 32,
-    max_prompt_length: int = 512,
-    max_completion_length: int = 128,
+    max_prompt_length: int = 128,
+    max_completion_length: int = 32,
     seed: int = 42,
 ):
     """
@@ -343,13 +343,22 @@ def train(
     peft_config = None
     if use_lora:
         logger.info(f"Using LoRA: r={lora_r}, alpha={lora_alpha}")
+        # Different models use different module names
+        # GPT2: c_attn, c_proj
+        # Gemma/Llama: q_proj, k_proj, v_proj, o_proj
+        if "gpt2" in model_name.lower():
+            target_modules = ["c_attn", "c_proj"]
+        else:
+            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+        
+        logger.info(f"LoRA target modules: {target_modules}")
         peft_config = LoraConfig(
             r=lora_r,
             lora_alpha=lora_alpha,
             lora_dropout=0.0,
             bias="none",
             task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+            target_modules=target_modules,
         )
     
     # Gemini judge + reward function
@@ -404,7 +413,8 @@ def train(
 @app.local_entrypoint()
 def main(
     command: str = "train",
-    max_steps: int = 40,
+    model_name: str = "gpt2",
+    max_steps: int = 5,
     use_lora: bool = True,
 ):
     """
@@ -436,6 +446,7 @@ def main(
         print(f"✓ Data uploaded: {result}")
     elif command == "train":
         result = train.remote(
+            model_name=model_name,
             max_steps=max_steps,
             use_lora=use_lora,
         )
