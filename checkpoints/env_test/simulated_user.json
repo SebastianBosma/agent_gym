@@ -1,0 +1,81 @@
+{
+  "respond": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "augmented": true,
+        "user_goal": "Intent: FindRestaurants, ReserveRestaurant | Info: city=Palo Alto, cuisine=American, price_range=moderate, restaurant_name=Bird Dog, time=11:30 am, date=today, party_size=2",
+        "conversation_history": "USER: I am feeling hungry so I would like to find a place to eat.\nASSISTANT: Do you have a specific which you want the eating place to be located at?",
+        "assistant_response": "Do you have a specific which you want the eating place to be located at?",
+        "user_message": "Yes, I want a restaurant in Palo Alto."
+      },
+      {
+        "user_goal": "Intent: FindRestaurants, ReserveRestaurant | Info: city=Palo Alto, cuisine=Freshwater fish, restaurant_name=P.f. Chang's, party_size=1, time=6:30 pm, date=today",
+        "conversation_history": "USER: Could you suggest any other restaurant?\nASSISTANT: P.f. Chang's is another nice restaurant in Palo Alto.\nUSER: Yes, that works for me.\nASSISTANT: Would you like to reserve a table here?\nUSER: Yes, I want to make a reservation for one. Make it at half past 6 in the evening.\nASSISTANT: Please confirm: Booking a table for 1 at P.f. Chang's at 6:30 pm today in Palo Alto.\nUSER: Yes, that works for me. How pricey are they? What is their contact number?\nASSISTANT: Your reservation is successful. Their price range is moderate and their phone number is 650-330-1782.\nUSER: Thank you very much.\nASSISTANT: Can I help you with anything else?",
+        "assistant_response": "Can I help you with anything else?",
+        "user_message": "No, thank you very much."
+      }
+    ],
+    "signature": {
+      "instructions": "Simulate a user with a specific goal in a customer service conversation.\n\nYou are role-playing as a customer who wants to accomplish a specific goal.\nGenerate a realistic, natural response to the assistant's message.\n\nGuidelines:\n- Stay in character as the user with the given goal\n- Provide information when asked, but don't volunteer everything at once\n- If the assistant asks about something you don't have a preference for, say so naturally\n- Express satisfaction when your goal is being met\n- Ask clarifying questions if the assistant's response is unclear\n- Keep responses concise (1-2 sentences typically)",
+      "fields": [
+        {
+          "prefix": "User Goal:",
+          "description": "The user's goal: intents they want to accomplish and information they have (e.g., 'Intent: FindRestaurant, ReserveRestaurant | Info: city=Oakland, cuisine=Italian, party_size=2')"
+        },
+        {
+          "prefix": "Conversation History:",
+          "description": "The conversation so far (USER: ... ASSISTANT: ...)"
+        },
+        {
+          "prefix": "Assistant Response:",
+          "description": "The assistant's most recent response that the user is replying to"
+        },
+        {
+          "prefix": "User Message:",
+          "description": "The user's natural response (1-2 sentences, staying in character)"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "start": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "augmented": true,
+        "user_goal": "Intent: FindRestaurants, ReserveRestaurant | Info: city=Palo Alto, cuisine=American, price_range=moderate, restaurant_name=Bird Dog, time=11:30 am, date=today, party_size=2",
+        "user_message": "I'm looking for a place to have lunch in Palo Alto, preferably somewhere that serves American food."
+      },
+      {
+        "user_goal": "Intent: FindRestaurants, ReserveRestaurant | Info: city=Palo Alto, cuisine=Freshwater fish, restaurant_name=P.f. Chang's, party_size=1, time=6:30 pm, date=today",
+        "conversation_history": "USER: Could you suggest any other restaurant?\nASSISTANT: P.f. Chang's is another nice restaurant in Palo Alto.\nUSER: Yes, that works for me.\nASSISTANT: Would you like to reserve a table here?\nUSER: Yes, I want to make a reservation for one. Make it at half past 6 in the evening.\nASSISTANT: Please confirm: Booking a table for 1 at P.f. Chang's at 6:30 pm today in Palo Alto.\nUSER: Yes, that works for me. How pricey are they? What is their contact number?\nASSISTANT: Your reservation is successful. Their price range is moderate and their phone number is 650-330-1782.\nUSER: Thank you very much.\nASSISTANT: Can I help you with anything else?",
+        "assistant_response": "Can I help you with anything else?",
+        "user_message": "No, thank you very much."
+      }
+    ],
+    "signature": {
+      "instructions": "Generate the user's opening message to start a conversation.\n\nYou are role-playing as a customer who wants to accomplish a specific goal.\nGenerate a natural opening message to start the conversation with an assistant.\n\nGuidelines:\n- Introduce your need naturally without providing all details upfront\n- Be conversational and realistic\n- Don't reveal all information at once - let the conversation unfold",
+      "fields": [
+        {
+          "prefix": "User Goal:",
+          "description": "The user's goal: intents they want to accomplish and information they have"
+        },
+        {
+          "prefix": "User Message:",
+          "description": "The user's opening message to start the conversation (1-2 sentences)"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.12",
+      "dspy": "3.0.4",
+      "cloudpickle": "3.1"
+    }
+  }
+}

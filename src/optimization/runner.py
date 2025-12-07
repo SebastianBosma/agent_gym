@@ -1,16 +1,18 @@
 """
-Optimization Runner - Manages prompt optimization with progress tracking.
+Environment Runner - Creates optimized RL environments for training dialogue agents.
 
 This module provides:
-- OptimizationRunner: Main class for running optimization
+- EnvironmentRunner: Optimizes SimulatedUserAgent and creates full environment
 - Progress callbacks for frontend integration
 - Structured events for real-time updates
+- Saves environment components for later use
 """
 
 import os
 import time
+import json
 import logging
-from typing import Optional, Callable, List, Dict, Any, Literal
+from typing import Optional, Callable, List, Dict, Any, Literal, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -20,14 +22,16 @@ import dspy
 from dspy.teleprompt import BootstrapFewShot
 
 from ..data.sgd_loader import SGDLoader
-from ..agent.sgd_agent import (
-    SGDAgentModule,
-    build_tool_catalog,
-    extract_training_examples,
-    create_metric,
-    compute_response_similarity,
-    compute_tool_accuracy,
+from ..agent.simulated_user import (
+    SimulatedUserAgent,
+    SimulatedUserModule,
+    extract_user_training_examples,
+    extract_all_user_goals,
+    create_user_simulation_metric,
+    compute_user_simulation_similarity,
 )
+from ..tool_mocker.sgd_mocker import LLMToolMocker, SGDToolMocker
+from ..reward.llm_judge import CachedLLMJudge
 
 
 # Configure module logger
@@ -68,54 +72,49 @@ class OptimizationEvent:
         """Convert to dictionary for JSON serialization."""
         return {
             "type": self.type.value if isinstance(self.type, EventType) else self.type,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else self.timestamp,
             **self.data,
         }
 
 
 @dataclass
-class OptimizationResult:
+class EnvironmentResult:
     """
-    Result of an optimization run.
+    Result of creating an optimized RL environment.
     
-    Attributes:
-        success: Whether optimization completed successfully
-        optimized_agent: The optimized agent module
-        baseline_score: Score before optimization
-        optimized_score: Score after optimization
-        improvement: Absolute improvement
-        improvement_pct: Percentage improvement
-        training_time: Time taken in seconds
-        num_examples: Number of training examples used
-        strategy: Optimization strategy used
-        events: List of events during optimization
-        initial_prompt: The starting prompt before optimization
-        optimized_prompt: The final prompt after optimization
-        few_shot_demos: Few-shot examples added by optimizer
+    Contains all components needed for training:
+    - Optimized SimulatedUserAgent
+    - Tool mocker configuration
+    - Reward function configuration
     """
     success: bool
-    optimized_agent: Optional[SGDAgentModule] = None
+    
+    # Components
+    simulated_user: Optional[SimulatedUserAgent] = None
+    tool_mocker: Optional[SGDToolMocker] = None
+    reward_fn: Optional[CachedLLMJudge] = None
+    
+    # Optimization metrics
     baseline_score: float = 0.0
     optimized_score: float = 0.0
     improvement: float = 0.0
     improvement_pct: float = 0.0
     training_time: float = 0.0
-    num_examples: int = 0
+    
+    # Details
+    num_user_goals: int = 0
+    num_training_examples: int = 0
+    num_tool_methods: int = 0
     strategy: str = ""
     events: List[OptimizationEvent] = field(default_factory=list)
     error_message: Optional[str] = None
-    initial_prompt: str = ""
-    optimized_prompt: str = ""
+    
+    # Prompts (for inspection)
+    simulated_user_prompt: str = ""
     few_shot_demos: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self, include_full_data: bool = False) -> Dict[str, Any]:
-        """
-        Convert to dictionary for JSON serialization.
-        
-        Args:
-            include_full_data: If True, include full prompts and events (for saving).
-                              If False, include only summaries (for frontend updates).
-        """
+        """Convert to dictionary for JSON serialization."""
         result = {
             "success": self.success,
             "baseline_score": self.baseline_score,
@@ -123,64 +122,69 @@ class OptimizationResult:
             "improvement": self.improvement,
             "improvement_pct": self.improvement_pct,
             "training_time": self.training_time,
-            "num_examples": self.num_examples,
+            "num_user_goals": self.num_user_goals,
+            "num_training_examples": self.num_training_examples,
+            "num_tool_methods": self.num_tool_methods,
             "strategy": self.strategy,
             "error_message": self.error_message,
-            "initial_prompt_length": len(self.initial_prompt),
-            "optimized_prompt_length": len(self.optimized_prompt),
-            "num_few_shot_demos": len(self.few_shot_demos),
         }
         
         if include_full_data:
-            result["initial_prompt"] = self.initial_prompt
-            result["optimized_prompt"] = self.optimized_prompt
+            result["simulated_user_prompt"] = self.simulated_user_prompt
             result["few_shot_demos"] = self.few_shot_demos
             result["events"] = [e.to_dict() for e in self.events]
-            result["prompt_changed"] = self.initial_prompt != self.optimized_prompt
         
         return result
     
-    def save(self, path: str) -> None:
+    def save(self, output_dir: str) -> Dict[str, str]:
         """
-        Save the full optimization result to a JSON file.
+        Save all environment components to a directory.
         
         Args:
-            path: Path to save the result (e.g., 'checkpoints/result.json')
-        """
-        import json
-        from pathlib import Path as P
-        
-        P(path).parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(path, 'w') as f:
-            json.dump(self.to_dict(include_full_data=True), f, indent=2)
-    
-    @classmethod
-    def load(cls, path: str) -> "OptimizationResult":
-        """
-        Load an optimization result from a JSON file.
-        
-        Args:
-            path: Path to the saved result
+            output_dir: Directory to save components
             
         Returns:
-            OptimizationResult (without the optimized_agent - load that separately)
+            Dict mapping component names to file paths
         """
-        import json
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
         
-        with open(path, 'r') as f:
+        saved_files = {}
+        
+        # Save simulated user module
+        if self.simulated_user:
+            user_path = output_path / "simulated_user.json"
+            try:
+                self.simulated_user.get_module().save(str(user_path))
+                saved_files["simulated_user"] = str(user_path)
+            except Exception as e:
+                logger.warning(f"Could not save simulated user: {e}")
+        
+        # Save result metadata
+        result_path = output_path / "environment_result.json"
+        with open(result_path, "w") as f:
+            json.dump(self.to_dict(include_full_data=True), f, indent=2)
+        saved_files["result"] = str(result_path)
+        
+        return saved_files
+    
+    @classmethod
+    def load(cls, output_dir: str) -> "EnvironmentResult":
+        """Load result from a directory."""
+        result_path = Path(output_dir) / "environment_result.json"
+        
+        with open(result_path, "r") as f:
             data = json.load(f)
         
         # Reconstruct events
         events = []
         for e in data.get("events", []):
-            # Extract type and timestamp, rest is data
             e_copy = dict(e)
             event_type = e_copy.pop("type", "log")
             timestamp = e_copy.pop("timestamp", "")
             events.append(OptimizationEvent(
                 type=event_type,
-                data=e_copy,  # Remaining fields are the data
+                data=e_copy,
                 timestamp=timestamp,
             ))
         
@@ -191,37 +195,48 @@ class OptimizationResult:
             improvement=data.get("improvement", 0.0),
             improvement_pct=data.get("improvement_pct", 0.0),
             training_time=data.get("training_time", 0.0),
-            num_examples=data.get("num_examples", 0),
+            num_user_goals=data.get("num_user_goals", 0),
+            num_training_examples=data.get("num_training_examples", 0),
+            num_tool_methods=data.get("num_tool_methods", 0),
             strategy=data.get("strategy", ""),
             events=events,
             error_message=data.get("error_message"),
-            initial_prompt=data.get("initial_prompt", ""),
-            optimized_prompt=data.get("optimized_prompt", ""),
+            simulated_user_prompt=data.get("simulated_user_prompt", ""),
             few_shot_demos=data.get("few_shot_demos", []),
         )
 
 
-class OptimizationRunner:
+# Keep old names for backward compatibility
+OptimizationResult = EnvironmentResult
+OptimizationEvent = OptimizationEvent
+
+
+class EnvironmentRunner:
     """
-    Manages prompt optimization with progress tracking.
+    Creates optimized RL environments for training dialogue agents.
     
-    This class provides:
-    - Easy setup for optimization
-    - Progress callbacks for frontend integration
-    - Structured events for real-time updates
-    - Support for BootstrapFewShot and MIPRO strategies
+    This runner:
+    1. Loads SGD data and extracts user goals
+    2. Optimizes the SimulatedUserAgent using DSPy
+    3. Creates LLM-powered tool mocker
+    4. Creates LLM judge reward function
+    5. Saves all components
     
     Example:
         def on_progress(event):
             print(f"{event.type}: {event.data}")
         
-        runner = OptimizationRunner(
+        runner = EnvironmentRunner(
             data_path="data/raw/schema_guided_dialogue",
             strategy="bootstrap",
             callback=on_progress,
         )
         result = runner.run()
-        print(f"Improvement: {result.improvement_pct:.1f}%")
+        
+        # Use the environment
+        simulated_user = result.simulated_user
+        tool_mocker = result.tool_mocker
+        reward_fn = result.reward_fn
     """
     
     def __init__(
@@ -232,23 +247,25 @@ class OptimizationRunner:
         num_eval: int = 20,
         max_demos: int = 4,
         num_candidates: int = 10,
-        model: str = "gemini-3-pro-preview",
+        model: str = "gemini-2.0-flash",
+        use_llm_tool_mocker: bool = True,
         callback: Optional[Callable[[OptimizationEvent], None]] = None,
         output_path: Optional[str] = None,
     ):
         """
-        Initialize the optimization runner.
+        Initialize the environment runner.
         
         Args:
             data_path: Path to SGD dataset
             strategy: "bootstrap" (fast) or "mipro" (Gemini rewrites prompts)
-            num_train: Number of training dialogues
+            num_train: Number of training dialogues for user simulation
             num_eval: Number of evaluation examples
             max_demos: Max few-shot demos for bootstrap
             num_candidates: Number of candidates for MIPRO
             model: Gemini model to use
+            use_llm_tool_mocker: Use LLM for generating plausible tool results
             callback: Function called with progress events
-            output_path: Path to save optimized agent
+            output_path: Directory to save environment components
         """
         self.data_path = Path(data_path)
         self.strategy = strategy
@@ -257,6 +274,7 @@ class OptimizationRunner:
         self.max_demos = max_demos
         self.num_candidates = num_candidates
         self.model = model
+        self.use_llm_tool_mocker = use_llm_tool_mocker
         self.callback = callback
         self.output_path = output_path
         
@@ -265,26 +283,21 @@ class OptimizationRunner:
         self.current_step = 0
         self.total_steps = 0
         self.baseline_score = 0.0
-        self.current_score = 0.0
-        self.candidates: List[Dict[str, Any]] = []
         
         # Components (lazy loaded)
         self._loader: Optional[SGDLoader] = None
-        self._tool_catalog: Optional[str] = None
         self._trainset: Optional[List] = None
         self._evalset: Optional[List] = None
         self._metric_fn = None
-        self._baseline_agent: Optional[SGDAgentModule] = None
+        self._baseline_module: Optional[SimulatedUserModule] = None
     
     def _emit(self, event_type: EventType, **data):
         """Emit an event to the callback."""
         event = OptimizationEvent(type=event_type, data=data)
         self.events.append(event)
         
-        # Log
         logger.info(f"[{event_type.value}] {data}")
         
-        # Call callback
         if self.callback:
             try:
                 self.callback(event)
@@ -304,50 +317,59 @@ class OptimizationRunner:
     
     def _load_data(self):
         """Load data and prepare training examples."""
-        self._emit(EventType.LOG, message="Loading data...")
+        self._emit(EventType.LOG, message="Loading SGD data...")
         
         self._loader = SGDLoader(self.data_path)
-        self._tool_catalog = build_tool_catalog(self._loader, "train")
         
         # Load dialogues
         train_dialogues = self._loader.load_dialogues("train", limit=self.num_train)
         eval_dialogues = self._loader.load_dialogues("dev", limit=self.num_eval)
         
-        # Extract examples
-        self._trainset = extract_training_examples(train_dialogues)
-        self._evalset = extract_training_examples(eval_dialogues)
+        # Extract user simulation training examples
+        self._trainset = extract_user_training_examples(train_dialogues)
+        self._evalset = extract_user_training_examples(eval_dialogues)
+        
+        # Count initial vs response examples
+        initial_count = sum(1 for ex in self._trainset 
+                          if not hasattr(ex, 'assistant_response') or not ex.assistant_response)
         
         self._emit(
             EventType.LOG,
-            message=f"Loaded {len(train_dialogues)} dialogues, {len(self._trainset)} examples",
+            message=f"Loaded {len(train_dialogues)} dialogues",
             num_dialogues=len(train_dialogues),
             num_examples=len(self._trainset),
-            num_services=self._tool_catalog.count("##"),
+            initial_messages=initial_count,
+            response_messages=len(self._trainset) - initial_count,
         )
     
-    def _create_metric(self):
-        """Create the metric function."""
-        self._metric_fn = create_metric()
-    
-    def _evaluate_agent(
+    def _evaluate_simulated_user(
         self,
-        agent: SGDAgentModule,
+        module: SimulatedUserModule,
         num_samples: int = None,
     ) -> float:
-        """Evaluate an agent on the eval set."""
+        """Evaluate simulated user on the eval set."""
         evalset = self._evalset[:num_samples] if num_samples else self._evalset
         
         scores = []
         for i, example in enumerate(evalset):
             try:
-                pred = agent(
-                    user_message=example.user_message,
-                    conversation_history=example.conversation_history,
+                has_assistant = hasattr(example, 'assistant_response') and example.assistant_response
+                
+                if has_assistant:
+                    pred = module(
+                        user_goal=example.user_goal,
+                        conversation_history=example.conversation_history,
+                        assistant_response=example.assistant_response,
+                    )
+                else:
+                    pred = module(user_goal=example.user_goal)
+                
+                score = compute_user_simulation_similarity(
+                    pred.user_message,
+                    example.user_message,
                 )
-                score = self._metric_fn(example, pred)
                 scores.append(score)
                 
-                # Emit progress
                 if i % 5 == 0:
                     self._emit(
                         EventType.EVALUATION,
@@ -362,16 +384,15 @@ class OptimizationRunner:
         
         return sum(scores) / len(scores) if scores else 0.0
     
-    def _run_bootstrap(self) -> SGDAgentModule:
-        """Run BootstrapFewShot optimization."""
+    def _run_bootstrap(self) -> SimulatedUserModule:
+        """Run BootstrapFewShot optimization on SimulatedUserModule."""
         self._emit(
             EventType.LOG,
-            message="Starting BootstrapFewShot optimization",
+            message="Starting BootstrapFewShot optimization for SimulatedUser",
             strategy="bootstrap",
             max_demos=self.max_demos,
         )
         
-        # Estimate total steps
         self.total_steps = min(50, len(self._trainset))
         self._emit(EventType.START, total_steps=self.total_steps, strategy="bootstrap")
         
@@ -381,10 +402,9 @@ class OptimizationRunner:
             max_labeled_demos=self.max_demos,
         )
         
-        # Use subset for speed
         train_subset = self._trainset[:self.total_steps]
         
-        # Track progress via custom metric wrapper
+        # Track progress
         original_metric = self._metric_fn
         step_count = [0]
         
@@ -404,44 +424,11 @@ class OptimizationRunner:
         
         optimizer.metric = tracking_metric
         
-        optimized = optimizer.compile(self._baseline_agent, trainset=train_subset)
+        optimized = optimizer.compile(self._baseline_module, trainset=train_subset)
         
         return optimized
     
-    def _get_optimized_prompt(self, agent: SGDAgentModule) -> str:
-        """Extract the prompt from an optimized agent."""
-        try:
-            # Try to get from the respond module's signature
-            if hasattr(agent, 'respond') and hasattr(agent.respond, 'signature'):
-                return agent.respond.signature.__doc__ or ""
-            # Fallback to agent's signature
-            if hasattr(agent, 'signature'):
-                return agent.signature.__doc__ or ""
-        except Exception:
-            pass
-        return ""
-    
-    def _get_few_shot_demos(self, agent: SGDAgentModule) -> List[Dict[str, Any]]:
-        """Extract few-shot demonstrations from an optimized agent."""
-        demos = []
-        try:
-            # DSPy stores demos in the predict module
-            if hasattr(agent, 'respond') and hasattr(agent.respond, 'demos'):
-                for demo in agent.respond.demos or []:
-                    demo_dict = {}
-                    if hasattr(demo, 'user_message'):
-                        demo_dict['user_message'] = demo.user_message
-                    if hasattr(demo, 'response'):
-                        demo_dict['response'] = demo.response
-                    if hasattr(demo, 'tool_call'):
-                        demo_dict['tool_call'] = demo.tool_call
-                    if demo_dict:
-                        demos.append(demo_dict)
-        except Exception:
-            pass
-        return demos
-    
-    def _run_mipro(self) -> SGDAgentModule:
+    def _run_mipro(self) -> SimulatedUserModule:
         """Run MIPRO optimization (Gemini rewrites prompts)."""
         try:
             from dspy.teleprompt import MIPROv2
@@ -455,43 +442,32 @@ class OptimizationRunner:
         
         self._emit(
             EventType.LOG,
-            message="Starting MIPRO optimization (Gemini will rewrite prompts)",
+            message="Starting MIPRO optimization for SimulatedUser",
             strategy="mipro",
             num_candidates=self.num_candidates,
         )
         
-        # MIPRO steps: candidates * evaluations
         self.total_steps = self.num_candidates * min(20, len(self._trainset))
         self._emit(EventType.START, total_steps=self.total_steps, strategy="mipro")
         
-        # Use training subset
         train_subset = self._trainset[:min(30, len(self._trainset))]
         eval_subset = self._evalset[:min(10, len(self._evalset))] if self._evalset else None
         
-        # MIPROv2 with explicit prompt optimization settings
         optimizer = MIPROv2(
             metric=self._metric_fn,
             num_candidates=self.num_candidates,
             init_temperature=1.0,
             verbose=True,
-            auto=None,  # Disable auto mode to use explicit settings
-        )
-        
-        self._emit(
-            EventType.LOG, 
-            message=f"Starting MIPROv2 with {self.num_candidates} trials on {len(train_subset)} examples"
         )
         
         try:
             optimized = optimizer.compile(
-                self._baseline_agent,
+                self._baseline_module,
                 trainset=train_subset,
                 valset=eval_subset,
                 num_trials=self.num_candidates,
                 minibatch=True,
                 minibatch_size=min(10, len(train_subset)),
-                program_aware_proposer=True,  # Enable instruction proposal
-                tip_aware_proposer=True,      # Enable tips/hints
             )
         except Exception as e:
             self._emit(
@@ -503,12 +479,39 @@ class OptimizationRunner:
         
         return optimized
     
-    def run(self) -> OptimizationResult:
+    def _get_simulated_user_prompt(self, module: SimulatedUserModule) -> str:
+        """Extract prompt from simulated user module."""
+        try:
+            if hasattr(module, 'respond') and hasattr(module.respond, 'signature'):
+                return module.respond.signature.__doc__ or ""
+        except Exception:
+            pass
+        return ""
+    
+    def _get_few_shot_demos(self, module: SimulatedUserModule) -> List[Dict[str, Any]]:
+        """Extract few-shot demos from module."""
+        demos = []
+        try:
+            for predictor_name in ['respond', 'start']:
+                predictor = getattr(module, predictor_name, None)
+                if predictor and hasattr(predictor, 'demos'):
+                    for demo in predictor.demos or []:
+                        demo_dict = {}
+                        for attr in ['user_goal', 'conversation_history', 'assistant_response', 'user_message']:
+                            if hasattr(demo, attr):
+                                demo_dict[attr] = getattr(demo, attr)
+                        if demo_dict:
+                            demos.append(demo_dict)
+        except Exception:
+            pass
+        return demos
+    
+    def run(self) -> EnvironmentResult:
         """
-        Run the optimization pipeline.
+        Run the environment creation pipeline.
         
         Returns:
-            OptimizationResult with scores and optimized agent
+            EnvironmentResult with optimized components
         """
         start_time = time.time()
         
@@ -516,17 +519,17 @@ class OptimizationRunner:
             # Setup
             self._configure_dspy()
             self._load_data()
-            self._create_metric()
+            self._metric_fn = create_user_simulation_metric()
             
-            # Create baseline
-            self._emit(EventType.LOG, message="Creating baseline agent...")
-            self._baseline_agent = SGDAgentModule(self._tool_catalog)
+            # Create baseline simulated user
+            self._emit(EventType.LOG, message="Creating baseline SimulatedUser...")
+            self._baseline_module = SimulatedUserModule()
             
             # Evaluate baseline
-            self._emit(EventType.LOG, message="Evaluating baseline...")
-            self.baseline_score = self._evaluate_agent(
-                self._baseline_agent,
-                num_samples=min(10, len(self._evalset)),
+            self._emit(EventType.LOG, message="Evaluating baseline SimulatedUser...")
+            self.baseline_score = self._evaluate_simulated_user(
+                self._baseline_module,
+                num_samples=min(15, len(self._evalset)),
             )
             self._emit(
                 EventType.LOG,
@@ -534,29 +537,56 @@ class OptimizationRunner:
                 baseline_score=self.baseline_score,
             )
             
-            # Run optimization
+            # Optimize simulated user
             if self.strategy == "mipro":
-                optimized_agent = self._run_mipro()
+                optimized_module = self._run_mipro()
             else:
-                optimized_agent = self._run_bootstrap()
+                optimized_module = self._run_bootstrap()
             
             # Evaluate optimized
-            self._emit(EventType.LOG, message="Evaluating optimized agent...")
-            optimized_score = self._evaluate_agent(
-                optimized_agent,
-                num_samples=min(10, len(self._evalset)),
+            self._emit(EventType.LOG, message="Evaluating optimized SimulatedUser...")
+            optimized_score = self._evaluate_simulated_user(
+                optimized_module,
+                num_samples=min(15, len(self._evalset)),
             )
             
             # Calculate improvement
             improvement = optimized_score - self.baseline_score
             improvement_pct = (improvement / self.baseline_score * 100) if self.baseline_score > 0 else 0
             
-            training_time = time.time() - start_time
+            self._emit(
+                EventType.LOG,
+                message=f"Optimized score: {optimized_score:.3f} ({improvement_pct:+.1f}%)",
+                optimized_score=optimized_score,
+                improvement_pct=improvement_pct,
+            )
             
-            # Capture prompts
-            initial_prompt = self._baseline_agent.signature.__doc__ or ""
-            optimized_prompt = self._get_optimized_prompt(optimized_agent)
-            few_shot_demos = self._get_few_shot_demos(optimized_agent)
+            # Create full environment components
+            self._emit(EventType.LOG, message="Creating environment components...")
+            
+            # Create SimulatedUserAgent with optimized module
+            simulated_user = SimulatedUserAgent(
+                data_path=str(self.data_path),
+                split="train",
+                model=self.model,
+            )
+            simulated_user.set_module(optimized_module)
+            
+            # Create tool mocker
+            if self.use_llm_tool_mocker:
+                tool_mocker = LLMToolMocker.from_loader(
+                    self._loader, "train", use_llm_fallback=True
+                )
+                self._emit(EventType.LOG, message="Created LLMToolMocker with fallback")
+            else:
+                tool_mocker = SGDToolMocker.from_loader(self._loader, "train")
+                self._emit(EventType.LOG, message="Created SGDToolMocker")
+            
+            # Create reward function
+            reward_fn = CachedLLMJudge()
+            self._emit(EventType.LOG, message="Created CachedLLMJudge reward function")
+            
+            training_time = time.time() - start_time
             
             # Emit completion
             self._emit(
@@ -569,46 +599,37 @@ class OptimizationRunner:
             )
             
             # Build result
-            result = OptimizationResult(
+            result = EnvironmentResult(
                 success=True,
-                optimized_agent=optimized_agent,
+                simulated_user=simulated_user,
+                tool_mocker=tool_mocker,
+                reward_fn=reward_fn,
                 baseline_score=self.baseline_score,
                 optimized_score=optimized_score,
                 improvement=improvement,
                 improvement_pct=improvement_pct,
                 training_time=training_time,
-                num_examples=len(self._trainset),
+                num_user_goals=simulated_user.get_num_goals(),
+                num_training_examples=len(self._trainset),
+                num_tool_methods=len(tool_mocker.get_available_methods()),
                 strategy=self.strategy,
                 events=self.events,
-                initial_prompt=initial_prompt,
-                optimized_prompt=optimized_prompt,
-                few_shot_demos=few_shot_demos,
+                simulated_user_prompt=self._get_simulated_user_prompt(optimized_module),
+                few_shot_demos=self._get_few_shot_demos(optimized_module),
             )
             
             # Save if path provided
             if self.output_path:
-                try:
-                    Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
-                    
-                    # Save the agent checkpoint
-                    optimized_agent.save(self.output_path)
-                    self._emit(EventType.LOG, message=f"Saved agent to {self.output_path}")
-                    
-                    # Save the full result (metrics, prompts, events)
-                    result_path = self.output_path.replace('.json', '_result.json')
-                    result.save(result_path)
-                    self._emit(EventType.LOG, message=f"Saved result to {result_path}")
-                    
-                except Exception as e:
-                    self._emit(EventType.LOG, message=f"Save error: {e}", level="warning")
+                saved = result.save(self.output_path)
+                self._emit(EventType.LOG, message=f"Saved to {self.output_path}", files=saved)
             
             return result
             
         except Exception as e:
             self._emit(EventType.ERROR, message=str(e))
-            logger.exception("Optimization failed")
+            logger.exception("Environment creation failed")
             
-            return OptimizationResult(
+            return EnvironmentResult(
                 success=False,
                 error_message=str(e),
                 training_time=time.time() - start_time,
@@ -617,29 +638,32 @@ class OptimizationRunner:
             )
 
 
+# Backward compatibility alias
+OptimizationRunner = EnvironmentRunner
+
+
 def run_optimization(
     data_path: str,
     strategy: str = "bootstrap",
     callback: Optional[Callable] = None,
     **kwargs,
-) -> OptimizationResult:
+) -> EnvironmentResult:
     """
-    Convenience function to run optimization.
+    Convenience function to create an optimized environment.
     
     Args:
         data_path: Path to SGD dataset
         strategy: "bootstrap" or "mipro"
         callback: Progress callback function
-        **kwargs: Additional arguments to OptimizationRunner
+        **kwargs: Additional arguments to EnvironmentRunner
         
     Returns:
-        OptimizationResult
+        EnvironmentResult with optimized components
     """
-    runner = OptimizationRunner(
+    runner = EnvironmentRunner(
         data_path=data_path,
         strategy=strategy,
         callback=callback,
         **kwargs,
     )
     return runner.run()
-
